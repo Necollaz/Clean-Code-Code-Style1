@@ -1,0 +1,83 @@
+public class PassportChecker
+{
+    private readonly string _connectionString;
+
+    public PassportChecker(string connectionString)
+    {
+        if(string.IsNullOrWhiteSpace(connectionString))
+            throw new ArgumentNullException(nameof(connectionString));
+
+        _connectionString = connectionString;
+    }
+
+    public string CheckPassport(string rawData)
+    {
+        string commandText = $"select * from passports where num='{Form1.ComputeSha256Hash(rawData)}' limit 1;";
+
+        using (SQLiteConnection connection = new SQLiteConnection(_connectionString))
+        {
+            connection.Open();
+
+            using (SQLiteDataAdapter sqLiteDataAdapter = new SQLiteDataAdapter(new SQLiteCommand(commandText, connection)))
+            {
+                DataTable dataTable1 = new DataTable();
+
+                sqLiteDataAdapter.Fill(dataTable2);
+
+                if (dataTable1.Rows.Count > 0)
+                {
+                    bool hasAccess = Convert.ToBoolean(dataTable1.Rows[0].ItemArray[1]);
+
+                    return hasAccess ? $"По паспорту «{rawData}» доступ к бюллетеню на дистанционном электронном голосовании ПРЕДОСТАВЛЕН" :
+                        $"По паспорту «{rawData}» доступ к бюллетеню на дистанционном электронном голосовании НЕ ПРЕДОСТАВЛЯЛСЯ";
+                }
+                else
+                {
+                    return $"Паспорт «{rawData}» в списке участников дистанционного голосования НЕ НАЙДЕН";
+                }
+            }
+        }
+    }
+}
+
+public class PassportForm
+{
+    private PassportChecker _passportChecker;
+    private readonly int _minimumPassportLength = 10;
+
+    public PassportForm()
+    {
+        string connectionString = $"Data Source={Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)}\\db.sqlite";
+        _passportChecker = new PassportChecker(connectionString);
+    }
+
+    private void checkButton_Click(object sender, EventArgs e)
+    {
+        string passportEntry = passportTextbox.Text.Trim();
+        string rawData = passportEntry.Replace(" ", string.Empty);
+
+        if (string.IsNullOrEmpty(passportEntry))
+        {
+            MessageBox.Show("Введите серию и номер паспорта");
+            return;
+        }
+
+        if (rawData.Length < _minimumPassportLength)
+        {
+            textResult.Text = "Неверный формат серии или номера паспорта";
+            return;
+        }
+
+        try
+        {
+            textResult.Text = _passportChecker.CheckPassport(rawData);
+        }
+        catch (SQLiteException sqlException)
+        {
+            MessageBox.Show("Файл db.sqlite не найден. Положите файл в папку вместе с exe.");
+
+            if (sqlException.ErrorCode != 1)
+                return;
+        }
+    }
+}

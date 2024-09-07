@@ -1,8 +1,15 @@
-public class PassportChecker
+public interface IPassportCheckerView
+{
+    public string PassportText { get; }
+    public string ResultText { set; }
+    public void ShowMessage(string message);
+}
+
+public class PassportCheckerModel
 {
     private readonly string _connectionString;
 
-    public PassportChecker(string connectionString)
+    public PassportCheckerModel(string connectionString)
     {
         if(string.IsNullOrWhiteSpace(connectionString))
             throw new ArgumentNullException(nameof(connectionString));
@@ -10,7 +17,7 @@ public class PassportChecker
         _connectionString = connectionString;
     }
 
-    public string CheckPassport(string rawData)
+    public string Check(string rawData)
     {
         string commandText = $"select * from passports where num='{Form1.ComputeSha256Hash(rawData)}' limit 1;";
 
@@ -22,7 +29,7 @@ public class PassportChecker
             {
                 DataTable dataTable1 = new DataTable();
 
-                sqLiteDataAdapter.Fill(dataTable2);
+                sqLiteDataAdapter.Fill(dataTable1);
 
                 if (dataTable1.Rows.Count > 0)
                 {
@@ -38,46 +45,86 @@ public class PassportChecker
             }
         }
     }
+
+    public string ComputeSha256Hash(string rawData)
+    {
+        using(var sha256 = System.Security.Cryptography.SHA256.Create())
+        {
+            byte[] bytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(rawData));
+            StringBuilder builder = new StringBuilder();
+
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                builder.Append(bytes[i].ToString("x2"));
+            }
+
+            return builder.ToString();
+        }
+    }
 }
 
-public class PassportForm
+public class PassportCheckerPresenter
 {
-    private PassportChecker _passportChecker;
+    private PassportCheckerModel _model;
+    private IPassportCheckerView _view;
     private readonly int _minimumPassportLength = 10;
 
-    public PassportForm()
+    public PassportCheckerPresenter(IPassportCheckerView view, PassportCheckerModel model)
     {
-        string connectionString = $"Data Source={Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)}\\db.sqlite";
-        _passportChecker = new PassportChecker(connectionString);
+        _model = model ?? throw new ArgumentNullException(nameof(model));
+        _view = view ?? throw new ArgumentNullException(nameof(view));
     }
 
-    private void checkButton_Click(object sender, EventArgs e)
+    public void OnCheckButtonClicked()
     {
-        string passportEntry = passportTextbox.Text.Trim();
+        string passportEntry = _view.PassportText.Trim();
         string rawData = passportEntry.Replace(" ", string.Empty);
 
         if (string.IsNullOrEmpty(passportEntry))
         {
-            MessageBox.Show("Введите серию и номер паспорта");
+            _view.ShowMessage("Введите серию и номер паспорта.");
             return;
         }
 
-        if (rawData.Length < _minimumPassportLength)
+        if(rawData.Length < _minimumPassportLength)
         {
-            textResult.Text = "Неверный формат серии или номера паспорта";
+            _view.ResultText = "Неверный формат серии или номера паспорта.";
             return;
         }
 
         try
         {
-            textResult.Text = _passportChecker.CheckPassport(rawData);
+            _view.ResultText = _model.Check(rawData);
         }
-        catch (SQLiteException sqlException)
+        catch (SQLiteException)
         {
-            MessageBox.Show("Файл db.sqlite не найден. Положите файл в папку вместе с exe.");
-
-            if (sqlException.ErrorCode != 1)
-                return;
+            _view.ShowMessage("Файл db.sqlite не найден. Положите файл в папку вместе с exe.");
         }
+    }
+}
+
+public class PassportForm : IPassportCheckerView
+{
+    private PassportCheckerPresenter _presenter;
+
+    public PassportForm()
+    {
+        string connectionString = $"Data Source={Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)}\\db.sqlite";
+        PassportCheckerModel model = new PassportCheckerModel(connectionString);
+        _presenter = new PassportCheckerPresenter(this, model);
+    }
+
+    public string PassportText => PassportTextbox.text;
+
+    public string ResultText { set => textResult.Text = value; }
+
+    public void ShowMessage(string message)
+    {
+        MessageBox.Show(message);
+    }
+
+    private void checkButton_Click(object sender, EventArgs e)
+    {
+        _presenter.OnCheckButtonClicked();
     }
 }

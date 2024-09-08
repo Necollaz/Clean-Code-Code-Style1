@@ -1,25 +1,93 @@
+using System.Text;
+using System.Data;
+
 public interface IPassportCheckerView
 {
     public string PassportText { get; }
-    public string ResultText { set; }
+    public void SetResultText(string text);
     public void ShowMessage(string message);
 }
 
-public class PassportCheckerModel
+public interface IHasher
+{
+    string ComputeSha256Hash(string rawData);
+}
+
+public class Hasher : IHasher
+{
+    public string ComputeSha256Hash(string rawData)
+    {
+        using (var sha256 = System.Security.Cryptography.SHA256.Create())
+        {
+            byte[] bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(rawData));
+            StringBuilder builder = new StringBuilder();
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                builder.Append(bytes[i].ToString("x2"));
+            }
+            return builder.ToString();
+        }
+    }
+}
+
+public class Citizen
+{
+    public Citizen(bool? hasAcces)
+    {
+        if (hasAcces == null)
+            throw new ArgumentException(nameof(hasAcces));
+
+        HasAccess = hasAcces;
+    }
+
+    public bool? HasAccess { get; private set; }
+}
+
+public class Passport
+{
+    public Passport(string passportEntry, int minPassportLenght)
+    {
+        if (string.IsNullOrEmpty(passportEntry))
+            throw new ArgumentException("Введите серию и номер паспорта.");
+
+        string trimmedEntry = passportEntry.Trim();
+        string rawData = trimmedEntry.Replace(" ", string.Empty);
+
+        if (rawData.Length < minPassportLenght)
+            throw new ArgumentException("Неверный формат серии или номера паспорта.");
+
+        RawData = rawData;
+    }
+
+    public string RawData { get; private set; }
+}
+
+public class DataReader
+{
+    public bool? ReadAccess(DataTable dataTable)
+    {
+        if (dataTable.Rows.Count > 0)
+            return Convert.ToBoolean(dataTable.Rows[0].ItemArray[1]);
+
+        return null;
+    }
+}
+
+public class DataTableProvider
 {
     private readonly string _connectionString;
 
-    public PassportCheckerModel(string connectionString)
+    public DataTableProvider(string connectionString)
     {
-        if(string.IsNullOrWhiteSpace(connectionString))
-            throw new ArgumentNullException(nameof(connectionString));
+        if (string.IsNullOrEmpty(connectionString))
+            throw new ArgumentException(nameof(connectionString));
 
         _connectionString = connectionString;
     }
 
-    public string Check(string rawData)
+    public DataTable GetData(string commandText)
     {
-        string commandText = $"select * from passports where num='{Form1.ComputeSha256Hash(rawData)}' limit 1;";
+        DataTable dataTable = new DataTable();
 
         using (SQLiteConnection connection = new SQLiteConnection(_connectionString))
         {
@@ -27,39 +95,89 @@ public class PassportCheckerModel
 
             using (SQLiteDataAdapter sqLiteDataAdapter = new SQLiteDataAdapter(new SQLiteCommand(commandText, connection)))
             {
-                DataTable dataTable1 = new DataTable();
-
-                sqLiteDataAdapter.Fill(dataTable1);
-
-                if (dataTable1.Rows.Count > 0)
-                {
-                    bool hasAccess = Convert.ToBoolean(dataTable1.Rows[0].ItemArray[1]);
-
-                    return hasAccess ? $"По паспорту «{rawData}» доступ к бюллетеню на дистанционном электронном голосовании ПРЕДОСТАВЛЕН" :
-                        $"По паспорту «{rawData}» доступ к бюллетеню на дистанционном электронном голосовании НЕ ПРЕДОСТАВЛЯЛСЯ";
-                }
-                else
-                {
-                    return $"Паспорт «{rawData}» в списке участников дистанционного голосования НЕ НАЙДЕН";
-                }
+                sqLiteDataAdapter.Fill(dataTable);
             }
         }
+
+        return dataTable;
+    }
+}
+
+public class PassportPresenterFactory
+{
+    private readonly string _connectionString;
+
+    public PassportPresenterFactory(string connectionString)
+    {
+        if (string.IsNullOrEmpty(connectionString))
+            throw new ArgumentException(nameof(connectionString));
+
+        _connectionString = connectionString;
     }
 
-    public string ComputeSha256Hash(string rawData)
+    public PassportCheckerPresenter Create(IPassportCheckerView passportView)
     {
-        using(var sha256 = System.Security.Cryptography.SHA256.Create())
-        {
-            byte[] bytes = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(rawData));
-            StringBuilder builder = new StringBuilder();
+        var dataTableProvider = new DataTableProvider(_connectionString);
+        var dataReader = new DataReader();
+        var hasher = new Hasher();
+        var model = new PassportCheckerModel(dataTableProvider, dataReader, hasher);
 
-            for (int i = 0; i < bytes.Length; i++)
-            {
-                builder.Append(bytes[i].ToString("x2"));
-            }
+        return new PassportCheckerPresenter(passportView, model);
+    }
+}
 
-            return builder.ToString();
-        }
+public class PassportCheckerView : IPassportCheckerView
+{
+    private readonly PassportCheckerPresenter _presenter;
+
+    public PassportCheckerView(PassportPresenterFactory passportPresenterFactory)
+    {
+        _presenter = passportPresenterFactory.Create(this);
+    }
+
+    public string PassportText => PassportTextbox.text;
+
+    public void SetResultText(string text)
+    {
+        textResult.Text = text;
+    }
+
+    public void ShowMessage(string message)
+    {
+        MessageBox.Show(message);
+    }
+
+    private void checkButton_Click(object sender, EventArgs e)
+    {
+        _presenter.OnCheckButtonClicked(PassportText);
+    }
+}
+
+public class PassportCheckerModel
+{
+    private readonly DataTableProvider _dataTableProvider;
+    private readonly DataReader _dataReader;
+    private readonly IHasher _hasher;
+
+    public PassportCheckerModel(DataTableProvider dataTableProvider, DataReader dataReader, IHasher hasher)
+    {
+        _dataTableProvider = dataTableProvider ?? throw new ArgumentNullException(nameof(dataTableProvider));
+        _dataReader = dataReader ?? throw new ArgumentNullException(nameof(dataReader));
+        _hasher = hasher ?? throw new ArgumentNullException(nameof(hasher));
+    }
+
+    public Citizen Check(string rawData)
+    {
+        if (string.IsNullOrEmpty(rawData))
+            throw new ArgumentException(nameof(rawData));
+
+        string commandText = $"select * from passports where num='{Form1.ComputeSha256Hash(rawData)}' limit 1;";
+
+        DataTable dataTable = _dataTableProvider.GetData(commandText);
+
+        bool? hasAccess = _dataReader.ReadAccess(dataTable);
+
+        return new Citizen(hasAccess);
     }
 }
 
@@ -75,56 +193,27 @@ public class PassportCheckerPresenter
         _view = view ?? throw new ArgumentNullException(nameof(view));
     }
 
-    public void OnCheckButtonClicked()
+    public void OnCheckButtonClicked(string passportEntry)
     {
-        string passportEntry = _view.PassportText.Trim();
-        string rawData = passportEntry.Replace(" ", string.Empty);
-
-        if (string.IsNullOrEmpty(passportEntry))
-        {
-            _view.ShowMessage("Введите серию и номер паспорта.");
-            return;
-        }
-
-        if(rawData.Length < _minimumPassportLength)
-        {
-            _view.ResultText = "Неверный формат серии или номера паспорта.";
-            return;
-        }
-
         try
         {
-            _view.ResultText = _model.Check(rawData);
+            var passport = new Passport(passportEntry, _minimumPassportLength);
+            var citizen = _model.Check(passport.RawData);
+
+            _view.SetResultText(citizen.HasAccess switch
+            {
+                true => $"По паспорту «{passport.RawData}» доступ к бюллетеню на дистанционном электронном голосовании ПРЕДОСТАВЛЕН",
+                false => $"По паспорту «{passport.RawData}» доступ к бюллетеню на дистанционном электронном голосовании НЕ ПРЕДОСТАВЛЯЛСЯ",
+                _ => $"Паспорт «{passport.RawData}» в списке участников дистанционного голосования НЕ НАЙДЕН"
+            });
+        }
+        catch (ArgumentException exception)
+        {
+            _view.ShowMessage(exception.Message);
         }
         catch (SQLiteException)
         {
             _view.ShowMessage("Файл db.sqlite не найден. Положите файл в папку вместе с exe.");
         }
-    }
-}
-
-public class PassportForm : IPassportCheckerView
-{
-    private PassportCheckerPresenter _presenter;
-
-    public PassportForm()
-    {
-        string connectionString = $"Data Source={Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)}\\db.sqlite";
-        PassportCheckerModel model = new PassportCheckerModel(connectionString);
-        _presenter = new PassportCheckerPresenter(this, model);
-    }
-
-    public string PassportText => PassportTextbox.text;
-
-    public string ResultText { set => textResult.Text = value; }
-
-    public void ShowMessage(string message)
-    {
-        MessageBox.Show(message);
-    }
-
-    private void checkButton_Click(object sender, EventArgs e)
-    {
-        _presenter.OnCheckButtonClicked();
     }
 }

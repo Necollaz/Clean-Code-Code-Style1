@@ -32,15 +32,12 @@ public class Hasher : IHasher
 
 public class Citizen
 {
-    public Citizen(bool? hasAcces)
+    public Citizen(bool hasAcces)
     {
-        if (hasAcces == null)
-            throw new ArgumentException(nameof(hasAcces));
-
         HasAccess = hasAcces;
     }
 
-    public bool? HasAccess { get; private set; }
+    public bool HasAccess { get; private set; }
 }
 
 public class Passport
@@ -64,10 +61,24 @@ public class Passport
 
 public class DataReader
 {
-    public bool? ReadAccess(DataTable dataTable)
+    private readonly DataTableProvider _dataTableProvider;
+
+    public DataReader(DataTableProvider dataTableProvider)
     {
+        _dataTableProvider = dataTableProvider ?? throw new ArgumentNullException(nameof(dataTableProvider));
+    }
+
+    public Citizen? ReadAccess(string hash)
+    {
+        if (string.IsNullOrEmpty(hash))
+            throw new ArgumentException(nameof(hash));
+
+        string commandText = $"select * from passports where num='{hash}' limit 1;";
+
+        DataTable dataTable = _dataTableProvider.GetData(commandText);
+
         if (dataTable.Rows.Count > 0)
-            return Convert.ToBoolean(dataTable.Rows[0].ItemArray[1]);
+            return new Citizen(Convert.ToBoolean(dataTable.Rows[0].ItemArray[1]));
 
         return null;
     }
@@ -117,10 +128,10 @@ public class PassportPresenterFactory
 
     public PassportCheckerPresenter Create(IPassportCheckerView passportView)
     {
-        var dataTableProvider = new DataTableProvider(_connectionString);
-        var dataReader = new DataReader();
-        var hasher = new Hasher();
-        var model = new PassportCheckerModel(dataTableProvider, dataReader, hasher);
+        DataTableProvider dataTableProvider = new DataTableProvider(_connectionString);
+        DataReader dataReader = new DataReader(dataTableProvider);
+        Hasher hasher = new Hasher();
+        PassportCheckerModel model = new PassportCheckerModel(dataReader, hasher);
 
         return new PassportCheckerPresenter(passportView, model);
     }
@@ -155,29 +166,23 @@ public class PassportCheckerView : IPassportCheckerView
 
 public class PassportCheckerModel
 {
-    private readonly DataTableProvider _dataTableProvider;
     private readonly DataReader _dataReader;
     private readonly IHasher _hasher;
 
-    public PassportCheckerModel(DataTableProvider dataTableProvider, DataReader dataReader, IHasher hasher)
+    public PassportCheckerModel(DataReader dataReader, IHasher hasher)
     {
-        _dataTableProvider = dataTableProvider ?? throw new ArgumentNullException(nameof(dataTableProvider));
         _dataReader = dataReader ?? throw new ArgumentNullException(nameof(dataReader));
         _hasher = hasher ?? throw new ArgumentNullException(nameof(hasher));
     }
 
-    public Citizen Check(string rawData)
+    public Citizen? Check(string rawData)
     {
         if (string.IsNullOrEmpty(rawData))
             throw new ArgumentException(nameof(rawData));
 
-        string commandText = $"select * from passports where num='{Form1.ComputeSha256Hash(rawData)}' limit 1;";
+        string hashedData = _hasher.ComputeSha256Hash(rawData);
 
-        DataTable dataTable = _dataTableProvider.GetData(commandText);
-
-        bool? hasAccess = _dataReader.ReadAccess(dataTable);
-
-        return new Citizen(hasAccess);
+        return _dataReader.ReadAccess(hashedData);
     }
 }
 
@@ -197,14 +202,14 @@ public class PassportCheckerPresenter
     {
         try
         {
-            var passport = new Passport(passportEntry, _minimumPassportLength);
-            var citizen = _model.Check(passport.RawData);
+            Passport passport = new Passport(passportEntry, _minimumPassportLength);
+            Citizen? citizen = _model.Check(passport.RawData);
 
-            _view.SetResultText(citizen.HasAccess switch
+            _view.SetResultText(citizen?.HasAccess switch
             {
                 true => $"По паспорту «{passport.RawData}» доступ к бюллетеню на дистанционном электронном голосовании ПРЕДОСТАВЛЕН",
                 false => $"По паспорту «{passport.RawData}» доступ к бюллетеню на дистанционном электронном голосовании НЕ ПРЕДОСТАВЛЯЛСЯ",
-                _ => $"Паспорт «{passport.RawData}» в списке участников дистанционного голосования НЕ НАЙДЕН"
+                null => $"Паспорт «{passport.RawData}» в списке участников дистанционного голосования НЕ НАЙДЕН"
             });
         }
         catch (ArgumentException exception)
